@@ -1,6 +1,6 @@
 import socket
 import sys
-from time import strftime, gmtime
+from time import strftime, gmtime, sleep
 import os.path
 import queue
 
@@ -26,6 +26,8 @@ def main():
     
     while True:
 
+        sleep(0.1)
+
         packet_raw = connection.recv(1024)
         if packet_raw:
             rcv_buf.put(packet_raw)
@@ -39,42 +41,19 @@ def main():
 
             message = snd_buf.get_nowait()
             packet = message.encode("utf-8")
-            print("Sending " + message.strip("\n"))
+            print("Sending Packet: " + message.strip("\n"))
             connection.send(packet)
 
 
 class server_self:
 
     def __init__(self):
-        self.mss = 150
         self.state = "closed"
+        self.offset = 0
         self.file = ""
-        self.dat = ""
+        self.data = ""
         self.HTTP_response = ""
-        self.dat_start = 0
-        self.dat_end = 0
-
-    def send_msg(self):
-
-        if self.state == "syn_rcv":
-            syn_ack_message = "syn+ack|seq:1|ack:1|dat:0"
-            snd_buf.put(syn_ack_message)
-
-        if self.state == "connected":
-
-            data =  self.get_data(1,1)
-
-            if len(data) < 1024:
-
-                ack_dat_message = "ack+dat+fin|seq:" + str(self.seq) + "|ack:" + str(self.ack) +"|dat:" + data
-                snd_buf.put(ack_dat_message)
-
-                self.state = "fin_wait_1"
-
-            else:
-
-                ack_dat_message = "ack+dat|seq:" + str(self.seq) + "|ack:" + str(self.ack) +"|dat:" + data
-                snd_buf.put(ack_dat_message)
+        self.client_window = 2
 
     def rcv_packet(self, packet):
 
@@ -86,6 +65,8 @@ class server_self:
         rcv_seq = int(packet_split[1][4:])
         rcv_ack = int(packet_split[2][4:])
         rcv_dat = packet_split[3][4:]
+
+        #Right here is super important!! Need to check for proper ack and seq
 
         self.seq = rcv_ack
         self.ack = rcv_seq + len(rcv_dat)
@@ -101,13 +82,25 @@ class server_self:
 
         if self.state == "connected":
 
+            #This part needs to be changed to adjust for packet loss
+
             if "dat" in rcv_flags:
 
                 self.file_handle(rcv_dat)
-                self.send_HTTP_response()
 
-            self.send_data(self.dat_start, self.dat_end)
+                self.send_data(0, 20)
+            
+            elif "ack" in rcv_flags:
 
+                start = self.seq - self.offset
+                end = self.seq - self.offset + 20
+
+                self.send_data(start, end)
+    
+        elif self.state == "fin_wait_1":
+
+            self.state = "fin_wait_2"
+            self.send_final_ack()
 
     def send_syn_ack(self):
 
@@ -143,35 +136,57 @@ class server_self:
         self.data = f.read()
         f.close()
 
-
-    def send_HTTP_response(self):
-
-        ack_message = "dat|seq:" + str(self.seq) + "|ack:" + str(self.ack) + "|dat:" + self.HTTP_response
-        snd_buf.put(ack_message)
-
-        self.seq += len(self.HTTP_response)
+        self.offset = len(self.HTTP_response)
 
 
     def send_data(self, start, end):
 
-        data = self.data[start:end]
+        #Needs to be changed to adjust the window
 
-        ack_message = "dat|seq:" + str(self.seq) + "|ack:" + str(self.ack) + "|dat:" + self.data
-        snd_buf.put(ack_message)
+        total_packet = ""
 
-        self.seq += len(self.HTTP_response)
+        #Sending the first packet including the HTTP request
 
-        self.dat_start += 150
-        self.dat_end += 150
+        if start == 0:
 
+            total_packet = "dat|seq:" + str(self.seq) + "|ack:" + str(self.ack) + "|dat:" + self.HTTP_response + " +=+ "
+            self.seq += len(self.HTTP_response)
+
+        #Sending the final packet data
+
+        if end > len(self.data):
+
+            data = self.data[start:]
+
+            dat_message = "dat+fin|seq:" + str(self.seq) + "|ack:" + str(self.ack) + "|dat:" + data
+            self.seq += len(self.data)
+
+            self.state = "fin_wait_1"
+
+            self.dat_start = 0
+            self.dat_end = 20
+
+            total_packet += dat_message
+
+        #Sending regular data packets
+
+        else:
             
-    def get_data(self, start, end):
+            data = self.data[start:end]
+            dat_message = "dat|seq:" + str(self.seq) + "|ack:" + str(self.ack) + "|dat:" + data
 
-        if end < len(self.data):
-            return self.data[start:end]
-        
-        return self.data[start:len(self.data)]
+            total_packet += dat_message
 
+            self.seq += len(data)
+
+        snd_buf.put(total_packet)
+    
+
+    def send_final_ack(self):
+
+        final_ack_message = "ack|seq:" + str(self.seq) + "|ack:" + str(self.ack) + "|dat:"
+        snd_buf.put(final_ack_message)
+        self.state = "closed"
 
 def time_stamp():
 
