@@ -6,13 +6,11 @@ from time import strftime, gmtime
 import re
 import os.path
 
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server_addr = ("localhost",  int(sys.argv[1]))
 
-server_address = ('localhost', int(sys.argv[1]))
+server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-server.bind(server_address)
-
-server.listen(5)
+server.bind(server_addr)
 
 outputs = []
 
@@ -25,55 +23,27 @@ rcv_buf = queue.Queue()
 def main():
 
     client_handler = server_self()
-
+    
     while True:
 
-        readable, writable, exceptional = select.select(inputs, outputs, inputs)
+        packet, client_addr = server.recvfrom(2048)
+        if packet:
+            client_handler.rcv_packet(client_addr, packet.decode("utf-8"))
 
-        for socket in readable:
-            if socket is server:
-                handle_new_connection(socket)
-            else:
-                handle_existing_connection(socket, client_handler)
+        while snd_buf.qsize() > 0:
+            message = snd_buf.get_nowait()
+            packet = message.encode("utf-8")
+            server.sendto(packet, client_addr)
 
-        for socket in writable:
-            while snd_buf.qsize() > 0:
-                message = snd_buf.get_nowait()
-                packet = message.encode("utf-8")
-                socket.send(packet)
-            outputs.remove(socket)
-            
-        for socket in exceptional:
-            #The socket timeout goes here check if the 
-            if socket in inputs:
-                exit("hello")
+        server.settimeout(2)
 
-    #     packet_raw = connection.recv(1024)
-    #     if packet_raw:
-    #         rcv_buf.put(packet_raw)
 
-    #     while rcv_buf.qsize() > 0:
-    #         next_raw_packet = rcv_buf.get_nowait()
-    #         next_packet = next_raw_packet.decode()
-    #         server_handler.rcv_packet(next_packet)
+def handle_recv(client_handler):
 
-    #     while snd_buf.qsize() > 0:
-
-    #         message = snd_buf.get_nowait()
-    #         packet = message.encode("utf-8")
-    #         print("Sending Packet: " + message.strip("\n"))
-    #         connection.send(packet)
-
-def handle_new_connection(socket):
-
-    c, a = socket.accept()
-    inputs.append(c)
-
-def handle_existing_connection(socket, client_handler):
-
-    packet_raw = socket.recv(1024).decode("utf-8")
-    if packet_raw:
-        client_handler.rcv_packet(socket, packet_raw)
+    packet_raw, client_addr = server.recvfrom(1024)
+    print(packet_raw)
+    packet = packet_raw.decode("utf-8")
+    client_handler.rcv_packet(client_addr, packet)
 
 class server_self:
 
@@ -84,11 +54,11 @@ class server_self:
         self.data = ""
         self.HTTP_response = ""
         self.client_window = 4
+        self.client_addr = ""
 
-    def rcv_packet(self, socket, packet):
+    def rcv_packet(self, client_addr, packet):
         
-        if socket not in outputs:
-            outputs.append(socket)
+        self.client_addr = client_addr
 
         print("Recieved Packet: " + packet.strip("\n"))
 

@@ -6,9 +6,7 @@ import queue
 
 server_addr = ("localhost",  int(sys.argv[1]))
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-sock.connect(server_addr)
+client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 snd_buf = queue.Queue()
 
@@ -27,9 +25,9 @@ def main():
             message = snd_buf.get_nowait()
             print("Sending Packet: " + message.strip("\n"))
             packet = message.encode("utf-8")
-            sock.send(packet)
+            client.sendto(packet, server_addr)
 
-        packet_raw = sock.recv(1024)
+        packet_raw = client.recv(1024)
 
         if packet_raw:
             rcv_buf.put(packet_raw)
