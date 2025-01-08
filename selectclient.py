@@ -47,7 +47,7 @@ def main():
                 rcv_packet, address = UDP_socket.recvfrom(500)
 
                 if rcv_packet:
-                    print("Received: " + packet.decode("utf-8"))
+                    print("Received: " + rcv_packet.decode("utf-8"))
 
                     count = 3
 
@@ -61,7 +61,7 @@ def main():
             #         print("Received: " + rcv_packet.decode("utf-8"))
             #         client_handler.recieve_packet(rcv_packet.decode("utf-8"))
 
-            except: 
+            except socket.timeout: 
                 sleep(0.2)
                 print("Connection Closed")
                 exit()
@@ -93,7 +93,6 @@ class client:
 
                 packet = packet[4:]
             
-
         if self.state == "connected":
 
             self.window = 4
@@ -111,17 +110,18 @@ class client:
 
             while self.window != 0:
 
-                if self.seq >= len(data):
+                if self.seq - 1 + self.fragment >= len(data):
 
-                    fin_data_to_send = data[self.seq-1:self.seq-1 + self.fragment]
-                    data_packet = "FIN|SEQ:" + str(self.seq) + "|ACK:" + str(self.ack) + "|" + fin_data_to_send
+                    fin_data_to_send = data[self.seq-1:]
+                    fin_data_packet = "FIN|SEQ:" + str(self.seq) + "|ACK:" + str(self.ack) + "|" + fin_data_to_send
 
-                    snd_buf.put(data_packet)
+                    snd_buf.put(fin_data_packet)
 
                     self.state = "fin-wait"
 
-                    break
+                    self.seq += len(fin_data_to_send)
 
+                    break
 
                 else:
 
@@ -136,6 +136,7 @@ class client:
 
 
         elif self.state == "fin-wait":
+            print(packet)
             exit("Transfer complete")
 
         return True
