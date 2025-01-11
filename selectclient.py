@@ -1,75 +1,74 @@
 import socket
-import sys
-from time import strftime, gmtime, sleep
-import os.path
+from time import sleep
 import queue
 import select
 
-server_addr = ("localhost", 8000)
-client_addr = ("localhost", 8001)
+# Define the maximum fragment size for packet data.
+FRAGMENT_SIZE = 2
 
-timeout = 10
+# Define the server and client addresses.
+SERVER_ADDR = ("localhost", 8000)
+CLIENT_ADDR = ("localhost", 8001)
+
+# Create and bind a UDP socket for the server.
+UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+UDP_socket.bind(SERVER_ADDR)
+
+# PACKET_LOSS = True
+# PACKET_MIX = True
+
+# Buffers for sending and receiving messages.
+snd_buf = queue.Queue()
+rcv_buf = []
 
 file = open("input.txt", "r")
 data = file.read()
 file.close()
 
-UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-UDP_socket.bind(server_addr)
-
-snd_buf = queue.Queue()
-rcv_buf = queue.Queue()
-
 def main():
+    """
+    Main function to handle sending and receiving messages between client and server.
+    Uses select for non-blocking I/O.
+    """
 
-    count = 3
-
-    UDP_socket.settimeout(timeout)
-    
     client_handler = client()
 
     while True:
 
         sleep(0.1)
 
-        while snd_buf.qsize() > 0:
+        while snd_buf.qsize() != 0:
+            # Process all messages in the send buffer.
             message = snd_buf.get_nowait()
-            print("Sent: " + message.strip("\n"))
             packet = message.encode("utf-8")
-            UDP_socket.sendto(packet, client_addr)
+            UDP_socket.sendto(packet, CLIENT_ADDR)
+            print("Sent: " + message.strip("\n"))
 
-        ready = select.select(([UDP_socket]), [], [], timeout)
+        # Wait for incoming data with a timeout of 6 seconds, otherwise socket is disconnected.
+        ready = select.select(([UDP_socket]), [], [], 6)
 
         if ready[0]:
-
             try:
-
                 rcv_packet, address = UDP_socket.recvfrom(500)
 
+                # Handle received packets.
                 if rcv_packet:
-                    print("Received: " + rcv_packet.decode("utf-8"))
+                    rcv_packet = rcv_packet.decode("utf-8")
+                    print("Received: " + rcv_packet)
+                    client_handler.recieve_packet(rcv_packet)
 
-                    count = 3
-
-                    client_handler.recieve_packet(rcv_packet.decode("utf-8"))
-
-
-            # try:
-            #     rcv_packet, address = UDP_socket.recvfrom(2500)
-            #     if rcv_packet:
-            #         sleep(0.2)
-            #         print("Received: " + rcv_packet.decode("utf-8"))
-            #         client_handler.recieve_packet(rcv_packet.decode("utf-8"))
-
-            except socket.timeout: 
-                sleep(0.2)
+            except socket.timeout:
                 print("Connection Closed")
                 exit()
 
 
 class client:
+    """
+    Implements a simplified TCP-like protocol client.
+    """
 
     def __init__(self):
+        """Initialize client state variables."""
         self.state = "closed"
         self.ack = 1
         self.seq = 1
@@ -79,6 +78,9 @@ class client:
 
 
     def recieve_packet(self, packet):
+        """
+        Handle packets in the receive buffer based on the connection state.
+        """
 
         split_packet = packet.split("|")
 
@@ -136,36 +138,32 @@ class client:
 
 
         elif self.state == "fin-wait":
-            print(packet)
-            exit("Transfer complete")
+
+            if split_packet[0] == "FIN":
+                exit("Transfer Complete")
+            else:
+                self.state = "connected"
+                self.recieve_packet(packet)
 
         return True
     
-
     def check_window(self):
-
+        """Return the current window size."""
         return self.window
     
-
     def raise_window(self):
-
+        """Decrease the window size."""
         self.window += 1
     
     def send_syn(self):
-
+        """Send a SYN packet to initiate connection."""
         syn_packet = "SYN|SEQ:0|ACK:0"
         snd_buf.put(syn_packet)
         self.state = "syn-sent"
 
-
     def send_first_ack(self):
-
+        """Send first ACK packet for connection initialization"""
         snd_buf.put("SEQ:1|ACK:1")
-
-
-    def send_ack(self):
-
-        snd_buf.put("SEQ:" + str(self.seq) + "|" + "ACK:" + str(self.ack))
 
 if __name__ == "__main__":
     main()

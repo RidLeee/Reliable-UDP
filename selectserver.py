@@ -1,125 +1,129 @@
 import socket
-import sys
-from time import strftime, gmtime, sleep
-import os.path
+from time import sleep
 import queue
 import select
 import random
 
+# Define the maximum fragment size for packet data.
 FRAGMENT_SIZE = 2
+
+# Define the server and client addresses.
 SERVER_ADDR = ("localhost", 8000)
 CLIENT_ADDR = ("localhost", 8001)
 
+# Create and bind a UDP socket for the client.
 UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 UDP_socket.bind(CLIENT_ADDR)
 
+# Enable packet loss and packet mix simulations for error handling demonstration.
 PACKET_LOSS = True
 PACKET_MIX = True
 
+# Buffers for sending and receiving messages.
 snd_buf = queue.Queue()
 rcv_buf = []
 
 def main():
-
+    """
+    Main function to handle sending and receiving messages between client and server.
+    Uses select for non-blocking I/O.
+    """
     server_handler = server()
+
+    count = 0
 
     while True:
 
+        sleep(0.1)
+        # Process all messages in the send buffer.
         while snd_buf.qsize() != 0:
-
             message = snd_buf.get_nowait()
-            print("Sent: " + message.strip("\n"))
             packet = message.encode("utf-8")
             UDP_socket.sendto(packet, SERVER_ADDR)
+            print("Sent: " + message.strip("\n"))
 
+        # Wait for incoming data with a timeout of 1 second.
         ready = select.select([UDP_socket], [], [], 1)
 
         if ready[0]:
-
             try:
+                rcv_packet, address = UDP_socket.recvfrom(500)
 
-                packet, address = UDP_socket.recvfrom(500)
+                if rcv_packet:
+                    rcv_packet = rcv_packet.decode("utf-8")
+                    rcv_buf.append(rcv_packet)  # Store received packet in buffer.
+                    server_handler.lower_window()  # Simulate window size decrement.
 
-                if packet:
-                    rcv_buf.append(packet.decode("utf-8"))
-                    #print("Received: " + packet.decode("utf-8"))
-                    server_handler.lower_window()
+                    #print("Received: " + rcv_packet)
 
+                    # If the receive window is full, handle received packets.
                     if server_handler.check_window() == 0:
                         server_handler.recieve_packets()
+                        count = 0
 
-            except socket.timeout:
-                print("Connection Closed")
-                exit()
-                
+            except:
+                exit("Connection Closed")
+
+        # Handle any remaining packets if nothing new is received.
         elif len(rcv_buf) > 0:
-            print("here")
             server_handler.recieve_packets()
+            count = 0
+        
+        elif count == 3:
+            exit("Server Timeout. Connection Closed")
 
-        # Optional to keep server running for multiple requests but doesn't really demonstrate anything
-        # else:
-        #     server_handler.reset_server()
+        else:
+            count += 1
 
+        # Optional reset for handling multiple requests (commented out).
+        # server_handler.reset_server()
 
 class server:
-
+    """
+    Simulates a server handling connection state, window size, and packet receipt.
+    Implements a simplified TCP-like protocol server.
+    """
     global rcv_buf
     global PACKET_MIX
     global PACKET_LOSS
 
     def __init__(self):
-
-        self.state = "listen"
-        self.ack = 1
-        self.seq = 1
-        self.window = 1
-
-    def reset_server(self):
-
+        """Initialize server state variables."""
         self.state = "listen"
         self.ack = 1
         self.seq = 1
         self.window = 1
 
     def recieve_packets(self):
-
+        """
+        Handle packets in the receive buffer based on the connection state.
+        Implements simulated error control and packet handling.
+        """
         global rcv_buf
         global PACKET_LOSS
 
-        ################################################# Error control simulation start
+        # Commented section to simulate packet mixing and packet loss for error handling.
         if PACKET_MIX:
-
             random.shuffle(rcv_buf)
-
             rcv_buf = sort_by_seq_number(rcv_buf)
 
         if PACKET_LOSS and self.state == "connected":
+            random_loss = random.randint(0, 5)
+            if random_loss < len(rcv_buf):
+                rcv_buf.pop(random_loss)
 
-                random_loss = random.randint(0, 5)
-
-                if random_loss < len(rcv_buf):
-
-                    rcv_buf.pop(random_loss)
-
-        ############################################### End error control simulation
-
-        for packet in rcv_buf:
+        while len(rcv_buf) != 0:
+            packet = rcv_buf.pop(0)
+            split_packet = packet.split("|")
 
             print("Received: " + packet)
 
-        while len(rcv_buf) != 0:
-
-            packet = rcv_buf.pop(0)
-
-            split_packet = packet.split("|")
-
             if self.state == "listen":
-
+                # Handle SYN packet to establish connection.
                 if packet == "SYN|SEQ:0|ACK:0":
 
                     self.state = "syn-received"
-                    syn_ack_packet = "SYN|SEQ:0|ACK:1"
-                    snd_buf.put(syn_ack_packet)
+                    self.send_syn_ack()
 
             if self.state == "syn-received":
 
@@ -132,13 +136,10 @@ class server:
                 self.ack = rcv_seq + 1
 
                 self.state = "connected"
-
                 self.window = 4
-
                 break
 
             if self.state == "connected":
-
                 if split_packet[0] != "FIN":
 
                     rcv_seq = int(split_packet[0][4:])
@@ -146,103 +147,76 @@ class server:
                     data = split_packet[2]
 
                     if rcv_seq == self.ack:
-
                         self.seq = rcv_ack
                         self.ack = rcv_seq + len(data)
-
-                        self.write_data(data)
+                        self.write_data(data)  # Write received data to file.
 
                         if len(rcv_buf) == 0:
-                            self.send_ack()
-
+                            self.send_ack()  # Acknowledge receipt.
                     else:
-
-                        rcv_buf.clear()
-                        self.window = 4
+                        rcv_buf.clear()  # Clear buffer if sequence is incorrect.
                         self.send_ack()
 
-                else:
+                else:  # Handle FIN packet to close connection.
 
                     rcv_seq = int(split_packet[1][4:])
                     rcv_ack = int(split_packet[2][4:])
                     data = split_packet[3]
 
                     if rcv_seq == self.ack:
-
                         self.seq = rcv_ack
                         self.ack = rcv_seq + len(data)
-
                         self.write_data(data)
-
                         self.send_fin_ack()
-
                         self.state = "fin-wait-2"
-
                     else:
-
                         rcv_buf.clear()
-                        self.window = 4
                         self.send_ack()
-                
-                
+
     def check_window(self):
-
+        """Return the current window size."""
         return self.window
-    
-    def lower_window(self):
 
+    def lower_window(self):
+        """Decrease the window size."""
         self.window -= 1
 
-    def raise_window(self):
-
-        self.window += 1
-    
     def send_syn(self):
-
+        """Send a SYN packet to complete connection."""
         syn_packet = "SYN|SEQ:0|ACK:0"
         snd_buf.put(syn_packet)
         self.state = "syn_sent"
 
     def write_data(self, data):
-
-        #print(data)
-
-        file = open("output.txt", "a")
-        data = file.write(data)
-        file.close()
+        """Write received data to a file."""
+        with open("output.txt", "a") as file:
+            file.write(data)
 
     def get_state(self):
-
+        """Return the current connection state."""
         return self.state
     
-    def send_ack(self):
+    def send_syn_ack(self):
+        """Send the SYN/ACK packet for connection initialization"""
+        snd_buf.put("SYN|SEQ:0|ACK:1")
 
+    def send_ack(self):
+        """Send an ACK packet for received data."""
+        self.window = 4
         snd_buf.put("SEQ:" + str(self.seq) + "|" + "ACK:" + str(self.ack))
 
     def send_fin_ack(self):
-
+        """Send a FIN-ACK packet to close connection."""
         snd_buf.put("FIN|SEQ:" + str(self.seq) + "|" + "ACK:" + str(self.ack))
 
-
 def sort_by_seq_number(packets):
-    """
-    Sorts a list of packet strings by their sequence numbers.
-
-    Args:
-        packets (list): List of packet strings in the format 'SEQ:x|ACK:y|data'.
-
-    Returns:
-        list: Sorted list of packet strings based on sequence numbers.
-    """
+    """Sort packets by their sequence number."""
     def extract_seq(packet):
-        """Helper function to extract the sequence number from a packet."""
         for part in packet.split('|'):
             if part.startswith('SEQ:'):
                 return int(part.split(':')[1])
-        return 0  # Default value in case SEQ is not found (should not happen with valid input)
-
+        return 0  # Default if no SEQ found.
     return sorted(packets, key=extract_seq)
-
 
 if __name__ == "__main__":
     main()
