@@ -1,6 +1,7 @@
-This project simulates a custom reliable data transfer protocol over UDP, demonstrating key TCP-like features such as connection management, packet sequencing, acknowledgments, and sliding window flow control. Using non-blocking I/O with the select module, the client sends fragmented data to the server, which reassembles it while handling packet loss and reordering. The implementation showcases how UDP, known for its speed but unreliability, can be adapted for reliable communication by employing these techniques.
+This project simulates a custom reliable data transfer protocol over UDP, demonstrating key TCP-like features including connection management, packet sequencing, acknowledgments, and sliding window flow control. The client sends fragmented data to the server, which reassembles it while handling packet loss and reordering. The implementation demonstrates a simple method of utilizing UDP to send data quickly with some desirable features of TCP to ensure data delivery.
 
 The selectclient.py manages connection initiation, data fragmentation, and state transitions, while selectserver.py listens for packets, processes them according to a simplified TCP-like protocol, and writes the received data to an output file. Packet loss and mixing are configurable in selectserver.py by toggling the PACKET_LOSS and PACKET_MIX flags.
+
 Instructions
 
     Place the data to be sent in an input.txt file.
