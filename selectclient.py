@@ -31,7 +31,7 @@ def main():
     Uses select for non-blocking I/O.
     """
 
-    client_handler = client()
+    client_handler = Client()
 
     while True:
 
@@ -62,7 +62,7 @@ def main():
                 exit()
 
 
-class client:
+class Client:
     """
     Implements a simplified TCP-like protocol client.
     """
@@ -94,6 +94,10 @@ class client:
                 self.state = "connected"
 
                 packet = packet[4:]
+
+            else:
+
+                self.send_syn()
             
         if self.state == "connected":
 
@@ -107,7 +111,7 @@ class client:
             self.seq = rcv_ack
             self.ack = rcv_seq
 
-            if self.ack == 0: #SHOULD OPTIMIZE OUT
+            if rcv_ack == 1 and rcv_seq == 0:
                 self.ack = 1
 
             while self.window != 0:
