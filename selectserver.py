@@ -16,8 +16,8 @@ UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 UDP_socket.bind(CLIENT_ADDR)
 
 # Enable packet loss and packet mix simulations for error handling demonstration.
-PACKET_LOSS = True
-PACKET_MIX = True
+PACKET_LOSS = False
+PACKET_MIX = False
 
 # Buffers for sending and receiving messages.
 snd_buf = queue.Queue()
@@ -28,7 +28,7 @@ def main():
     Main function to handle sending and receiving messages between client and server.
     Uses select for non-blocking I/O.
     """
-    server_handler = server()
+    server_handler = Server()
 
     count = 0
 
@@ -43,7 +43,7 @@ def main():
             print("Sent: " + message.strip("\n"))
 
         # Wait for incoming data with a timeout of 1 second.
-        ready = select.select([UDP_socket], [], [], 1)
+        ready = select.select([UDP_socket], [], [], 4)
 
         if ready[0]:
             try:
@@ -63,22 +63,13 @@ def main():
 
             except:
                 exit("Connection Closed")
-
-        # Handle any remaining packets if nothing new is received.
+        
         elif len(rcv_buf) > 0:
             server_handler.recieve_packets()
-            count = 0
-        
-        elif count == 3:
-            exit("Server Timeout. Connection Closed")
 
-        else:
-            count += 1
 
-        # Optional reset for handling multiple requests (commented out).
-        # server_handler.reset_server()
 
-class server:
+class Server:
     """
     Simulates a server handling connection state, window size, and packet receipt.
     Implements a simplified TCP-like protocol server.
@@ -100,6 +91,7 @@ class server:
         Implements simulated error control and packet handling.
         """
         global rcv_buf
+        global PACKET_MIX
         global PACKET_LOSS
 
         # Commented section to simulate packet mixing and packet loss for error handling.
@@ -107,23 +99,24 @@ class server:
             random.shuffle(rcv_buf)
             rcv_buf = sort_by_seq_number(rcv_buf)
 
-        if PACKET_LOSS and self.state == "connected":
+        if PACKET_LOSS:
+            print("in here")
             random_loss = random.randint(0, 5)
             if random_loss < len(rcv_buf):
                 rcv_buf.pop(random_loss)
 
         while len(rcv_buf) != 0:
+            
             packet = rcv_buf.pop(0)
+
             split_packet = packet.split("|")
 
             print("Received: " + packet)
 
-            if self.state == "listen":
+            if self.state == "listen" or packet == "SYN|SEQ:0|ACK:0":
                 # Handle SYN packet to establish connection.
-                if packet == "SYN|SEQ:0|ACK:0":
-
-                    self.state = "syn-received"
-                    self.send_syn_ack()
+                self.state = "syn-received"
+                self.send_syn_ack()
 
             if self.state == "syn-received":
 
@@ -173,6 +166,7 @@ class server:
                         rcv_buf.clear()
                         self.send_ack()
 
+
     def check_window(self):
         """Return the current window size."""
         return self.window
@@ -208,6 +202,17 @@ class server:
     def send_fin_ack(self):
         """Send a FIN-ACK packet to close connection."""
         snd_buf.put("FIN|SEQ:" + str(self.seq) + "|" + "ACK:" + str(self.ack))
+
+class client:
+    """
+    Implements a simplified TCP-like protocol client.
+    """
+
+    def __init__(self):
+        """Initialize client state variables."""
+        self.state = "closed"
+        self.ack = 1
+        self.seq = 1
 
 def sort_by_seq_number(packets):
     """Sort packets by their sequence number."""
