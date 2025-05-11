@@ -8,14 +8,14 @@ import random
 FRAGMENT_SIZE = 2
 
 # Define the server and client addresses.
-SERVER_ADDR = ("localhost", 8000)
+SERVER_ADDR = ("localhost", 8002)
 CLIENT_ADDR = ("localhost", 8001)
 
 # Create and bind a UDP socket for the server.
 UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 UDP_socket.bind(SERVER_ADDR)
 
-PACKET_LOSS = True
+PACKET_LOSS = False
 
 # Buffers for sending and receiving messages.
 snd_buf = queue.Queue()
@@ -37,7 +37,7 @@ def main():
 
     while True:
 
-        sleep(0.1)
+        sleep(0.25)
 
         while snd_buf.qsize() != 0:
             # Process all messages in the send buffer.
@@ -46,8 +46,8 @@ def main():
             UDP_socket.sendto(packet, CLIENT_ADDR)
             print("Sent: " + message.strip("\n"))
 
-        # Wait for incoming data with a timeout of 6 seconds, otherwise socket is disconnected.
-        ready = select.select(([UDP_socket]), [], [], 5)
+        # Wait for incoming data with a timeout of 3 seconds, otherwise socket is disconnected.
+        ready = select.select(([UDP_socket]), [], [], 2)
 
         if ready[0]:
             rcv_packet, address = UDP_socket.recvfrom(500)
@@ -64,12 +64,7 @@ def main():
 
             else:
                 socket_disconnect += 1
-                cur_state = client_handler.get_state()
-                if cur_state == "syn-sent":
-                    client_handler.send_syn()
-                elif cur_state == "connected" or "fin-wait":
-                    client_handler.connected_timeout()
-                    client_handler.send_data()
+                client_handler.lost_packet()
 
 
 class Client:
@@ -81,103 +76,134 @@ class Client:
         """Initialize client state variables."""
         self.state = "closed"
         self.ack = 1
-        self.last_ack = 1
         self.seq = 1
+        self.expected_acks = []
         self.window = 1
         self.fragment = 2
-        self.expected_seq = 1
-        self.last_packet = None
         self.send_syn()
 
-
     def recieve_packet(self, packet):
-        """
-        Handle packets in the receive buffer based on the connection state.
-        """
-        global PACKET_LOSS
 
-        if PACKET_LOSS and self.state == "connected":
-            random_loss = random.randint(0, 1)
-            if random_loss == 1:
-                print("Lost Packet: " + packet)
-                PACKET_LOSS = False
-                return
-        
         print("Received: " + packet)
+
+        match self.state:
+            case "syn_sent":
+                self.syn_sent_rcv(packet)
+            case "connected":
+                self.connected_rcv(packet)
+            case "fin_wait":
+                self.fin_wait_rcv(packet)
+        return True
+    
+    def syn_sent_rcv(self, packet):
+
+        if packet == "SYN:1|SEQ:0|ACK:1|FIN:0|DAT:0|":
+            self.state = "connected"
+            self.seq = 1
+            self.ack = 1
+            self.window = 4
+            while self.window > 0:
+                self.send_data()
+
+    def connected_rcv(self, packet):
 
         split_packet = packet.split("|")
 
-        if self.state == "close":
-            exit("Transfer Complete Connection Terminated")
+        self.window += 1
 
-        if self.state == "syn-sent":
-            if packet == "SYN|SEQ:0|ACK:1": # This check is redundant since the server will only respond with a syn response.
-                self.state = "connected"
-                packet = packet[4:]
-            else:
-                self.send_syn() # Resend initial syn since it got lost
-            
-        if self.state == "connected":
+        rcv_seq = int(split_packet[1][4:])
+        rcv_ack = int(split_packet[2][4:])
 
-            split_packet = packet.split("|")
+        syn_flag = int(split_packet[0][4:])
+        fin_flag = int(split_packet[3][4:])
 
-            rcv_seq = int(split_packet[0][4:])
-            rcv_ack = int(split_packet[1][4:])
+        if self.expected_acks[0] == rcv_ack: #Edge case here in case the fin packet is lost
+            self.expected_acks.pop(0)
+        
+        else:
+            self.seq = self.expected_acks[0] - self.fragment
+            self.expected_acks = []
+            self.window = 4
 
-            self.seq = rcv_ack
-            self.ack = rcv_seq
-            self.last_ack = rcv_ack
-
-            if rcv_ack == 1 and rcv_seq == 0: 
-                self.ack = 1
-
+        while self.window > 0:
             self.send_data()
-
-        elif self.state == "fin-wait":
-
-            if split_packet[0] == "FIN":
-                exit("Transfer Complete")
-
-            else:
-                self.state = "connected"
-                self.send_data(packet)
-
-        return True
     
-    def send_data(self):
+    def fin_wait_rcv(self, packet):
+
+        self.window += 1
+
+        split_packet = packet.split("|")
+
+        rcv_seq = int(split_packet[1][4:])
+        rcv_ack = int(split_packet[2][4:])
+
+        syn_flag = int(split_packet[0][4:])
+        fin_flag = int(split_packet[3][4:])
+
+        if self.expected_acks[0] == rcv_ack and fin_flag: #Edge case here in case the fin packet is lost
+            exit("========== Transfer Complete ============")
+            self.expected_acks.pop(0)
         
-        self.window = 4
+        elif self.expected_acks[0] == rcv_ack:
+            self.expected_acks.pop(0)
+
+        else:
+            self.window = 4
+            self.seq = self.expected_acks[0] - self.fragment
+            self.expected_acks = []
         
-        while self.window != 0:
+            while self.window > 0:
+                self.send_data()
 
-            if self.seq - 1 + self.fragment >= len(data):
 
-                fin_data_to_send = data[self.seq-1:]
-                fin_data_packet = "FIN|SEQ:" + str(self.seq) + "|ACK:" + str(self.ack) + "|" + fin_data_to_send
-                snd_buf.put(fin_data_packet)
-                self.state = "fin-wait"
-                self.seq += len(fin_data_to_send)
-                break
-
-            else:
-
-                data_to_send = data[self.seq-1:self.seq-1 + self.fragment]
-                data_packet = "SEQ:" + str(self.seq) + "|ACK:" + str(self.ack) + "|" + data_to_send
-                snd_buf.put(data_packet)
-                self.seq += self.fragment
-                self.window -= 1
-
-    def connected_timeout(self):
-        self.seq = self.last_ack
-
-    def get_state(self):
-        return self.state
-    
     def send_syn(self):
-        """Send a SYN packet to initiate connection."""
-        syn_packet = "SYN|SEQ:0|ACK:0"
+
+        syn_packet = "SYN:1|SEQ:0|ACK:0|FIN:0|DAT:0|"
         snd_buf.put(syn_packet)
-        self.state = "syn-sent"
+        self.state = "syn_sent"
+
+    def send_data(self):
+
+        print("FJHDSJFHDSKJ")
+
+        # If sending the final data packet
+
+        if self.seq - 1 + self.fragment >= len(data):
+
+            fin_data_to_send = data[self.seq-1:]
+            fin_data_packet = f"SYN:0|SEQ:{self.seq}|ACK:{self.ack}|FIN:1|DAT:1|{fin_data_to_send}"
+            snd_buf.put(fin_data_packet)
+            self.seq += len(fin_data_to_send)
+            self.state = "fin_wait"
+            self.window -= 1
+
+        # If not sending the final data packet
+        else:
+
+            data_to_send = data[self.seq-1:self.seq-1 + self.fragment]
+            data_packet = f"SYN:0|SEQ:{self.seq}|ACK:{self.ack}|FIN:0|DAT:1|{data_to_send}"
+            snd_buf.put(data_packet)
+            self.seq += self.fragment
+            self.window -= 1
+
+        self.expected_acks.append(self.seq)
+
+        print(self.expected_acks)
+        
+
+    def lost_packet(self):
+        
+        match self.state:
+            case "syn_sent":
+                self.send_syn()
+            case "connected":
+                self.seq = self.expected_acks[0] - self.fragment
+                self.expected_acks = []
+                self.window = 4
+                while self.window > 0:
+                    self.send_data()
+        return True
+
 
 if __name__ == "__main__":
     main()
