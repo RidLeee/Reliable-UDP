@@ -164,8 +164,6 @@ class Client:
 
     def send_data(self):
 
-        print("FJHDSJFHDSKJ")
-
         # If sending the final data packet
 
         if self.seq - 1 + self.fragment >= len(data):
